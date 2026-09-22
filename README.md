@@ -17,7 +17,7 @@ system and described by independent, freely combinable choices of *what the
 error looks like*, *when it activates*, and *how long it lasts*; faults can be
 enabled one by one, injected at many points at once, and chained so that one
 fault triggers another; every activation is recorded with its parameters.
-Users add their own fault types by subclassing.
+Each built-in fault type lives in its own module under `fiblock/faults/`; users add their own fault types the same way, by subclassing.
 
 If you use FIBlock, please cite the original paper (see [Citation](#citation)).
 
