@@ -1,0 +1,17 @@
+FIBlock-Py
+Copyright 2026 Tagir Fabarisov
+
+Python implementation and extension of FIBlock, a model-based fault-injection
+framework for cyber-physical systems. The original FIBlock for MATLAB/Simulink
+is available at https://github.com/TagirFabarisov/FIBlock.
+
+If you use this software in your research, please cite:
+
+  T. Fabarisov, I. Mamaev, A. Morozov, and K. Janschek,
+  "Model-based Fault Injection Experiments for the Safety Analysis of
+  Exoskeleton System," Proceedings of the 30th European Safety and
+  Reliability Conference and the 15th Probabilistic Safety Assessment and
+  Management Conference (ESREL 2020 / PSAM 15), 2020.
+  arXiv:2101.01283.
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
