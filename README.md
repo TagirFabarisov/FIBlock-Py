@@ -25,36 +25,88 @@ If you use FIBlock, please cite the original paper (see [Citation](#citation)).
 
 ## Installation
 
-Requires Python 3.9+ and NumPy.
+Requires Python 3.9+ and NumPy. From a clone of this repository:
 
 ```bash
-pip install -e .            # from a clone of this repository
-python -m pytest            # run the tests
+python -m pip install --upgrade pip   # an editable install of a pyproject-only package needs pip 21.3 or newer
+pip install -e .
+python -m pytest                      # run the tests
 ```
+
+Without installing, the examples and tests also run with `PYTHONPATH=src`.
 
 ## Quick start
 
+Run the smallest example and read it:
+
+```bash
+python examples/00_minimal_noise.py
+```
+
+FIBlock connects to a system at one kind of place: between a value and
+whoever consumes it, where a FIBlock block would sit on a Simulink signal
+line. You give that place a name, an **injection point**, and route the value
+through FIBlock there. Two calls do it: `advance(t)` once per step, so that
+fault events and fault effects can act, and `apply(point, value)` where the
+value passes. What comes back is what the rest of the system sees. The
+system itself is not changed.
+
 ```python
-from fiblock import Campaign, FaultInjector, Bias, PacketLoss, Deterministic, FailureRate, ConstantTime
+from fiblock import Campaign, ConstantTime, Deterministic, FaultInjector, Noise
 
+# --- your system, unchanged: a tank whose temperature sensor feeds a thermostat
+temperature = 20.0
+
+def thermostat(reading):
+    return reading < 21.0          # heater on below 21 degrees
+
+# --- FIBlock: one injection point named "temp_sensor", one injector on it
 campaign = Campaign({
-    "methane_sensor": FaultInjector(Bias(0.3), Deterministic(120.0), ConstantTime(30.0)),
-    "bus":            FaultInjector(PacketLoss(0.5), FailureRate(0.02), ConstantTime(3.0)),
-}, seed=42)
+    "temp_sensor": FaultInjector(
+        Noise(value=0.5),          # what: gaussian noise, amplitude 0.5 degrees
+        Deterministic(time=3.0),   # when: from t = 3
+        ConstantTime(value=4.0),   # how long: for 4 time units
+    ),
+}, seed=1)
 
-for t in times:                                        # the host's own clock, any unit
-    campaign.advance(t)                                # fault events, fault effects, triggers
-    methane = campaign.apply("methane_sensor", methane_true)
-    message = campaign.inject("bus", message_true)     # .value, .missing, .data_error, .caused_by
+# --- your loop, with the two FIBlock calls inserted
+for t in range(10):
+    campaign.advance(t)                                   # (1) fault events and effects act
+    reading = campaign.apply("temp_sensor", temperature)  # (2) the sensor value passes the point
+    heater_on = thermostat(reading)                       # the controller sees the corrupted reading
+    temperature += 0.3 if heater_on else -0.3             # your physics, untouched
+    print(f"t={t}  true={temperature:5.2f}  sensor reads={reading:5.2f}  heater={'on' if heater_on else 'off'}")
 
-for record in campaign.log:                            # who, when, why, with which parameters
+for record in campaign.log:                               # what FIBlock did
     print(record)
 ```
 
-An **injection point** is a name the host chooses: a sensor reading, a
-message on a link, a controller word, a pump's capacity parameter. FIBlock
-never touches the host's state; the host passes each value through `apply` or
-`inject` and receives it as the active faults leave it.
+```
+t=0  true=20.30  sensor reads=20.00  heater=on
+t=1  true=20.60  sensor reads=20.30  heater=on
+t=2  true=20.90  sensor reads=20.60  heater=on
+t=3  true=21.20  sensor reads=19.58  heater=on      <- noise starts
+t=4  true=20.90  sensor reads=21.87  heater=off
+t=5  true=21.20  sensor reads=20.71  heater=on
+t=6  true=21.50  sensor reads=20.70  heater=on
+t=7  true=21.20  sensor reads=21.50  heater=off     <- fault effect over, on time again
+t=8  true=20.90  sensor reads=21.20  heater=off
+t=9  true=21.20  sensor reads=20.90  heater=on
+t=3 activation    Noise@temp_sensor#0 (Noise on temp_sensor) via Deterministic sampled={'activation_time': 3.0, 'scheduled_time': 3.0, 'duration': 4.0}
+t=7 deactivation  Noise@temp_sensor#0 (Noise on temp_sensor) via expired
+```
+
+Between t = 3 and t = 7 the thermostat acts on a noisy reading and switches
+at the wrong moments; before and after, it sees the true value. The two lines
+at the end are FIBlock's own record of the fault.
+
+An injection point can be anything the host reads each step: a sensor
+reading, a message on a link, a controller word, a pump's capacity parameter
+(route the capacity through a point with a `Gain(0.6)` on it and the pump
+runs at 60 % while the fault is active). A campaign maps each point to one
+injector or a list of them; a single injector can also run on its own
+(`FaultInjector(..., seed=1)`, then `step(t)` and `inject(value)`). The other
+scripts in [`examples/`](examples/README.md) build up from here.
 
 ## How the library is organised
 
