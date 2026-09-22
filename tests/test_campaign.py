@@ -1,157 +1,146 @@
-import json
-
+"""The campaign: several injectors, chaining, custom fault types, seeds."""
 import numpy as np
 import pytest
 
-from fiblock import (MISSING, At, Bias, Campaign, Delay, Exponential, Fault, Fixed, Immediately, Noise, Normal, Once,
-                     PacketLoss, Permanent, Rate, SampledDuration, SampledTime, Scale, Triggered, Weibull, register)
+from fiblock import (Bias, Campaign, ConstantTime, Deterministic, FaultInjector, FaultType, Freeze, Gain, InfiniteTime,
+                     Never, Noise, Once, PacketLoss, StuckAt, Trigger, register)
 
 
-def test_multiple_faults_same_target_apply_in_order():
-    c = Campaign([Bias("x", 1.0), Scale("x", 2.0)], seed=1)
+def test_injectors_on_one_point_apply_in_attachment_order():
+    c = Campaign({"x": [FaultInjector(Bias(1.0), Deterministic(), InfiniteTime(), name="b"),
+                        FaultInjector(Gain(2.0), Deterministic(), InfiniteTime(), name="s")]}, seed=1)
     o = c.inject("x", 1.0, t=0)
-    assert o.value == 4.0 and o.manifested == ("Bias@x#0", "Scale@x#1")
-    c2 = Campaign([Scale("x", 2.0), Bias("x", 1.0)], seed=1)
+    assert o.value == 4.0 and o.data_error and o.caused_by == ("b", "s") and o.active == ("b", "s")
+    c2 = Campaign({"x": [FaultInjector(Gain(2.0), Deterministic(), InfiniteTime()),
+                         FaultInjector(Bias(1.0), Deterministic(), InfiniteTime())]}, seed=1)
     assert c2.apply("x", 1.0, t=0) == 3.0
 
 
-def test_multiple_faults_different_targets_are_independent():
-    c = Campaign([Bias("a", 1.0, activation=At(1.0)), Scale("b", 0.5, activation=At(2.0))], seed=1)
+def test_points_are_independent_and_auto_named():
+    c = Campaign({"a": FaultInjector(Bias(1.0), Deterministic(1.0), InfiniteTime()),
+                  "b": FaultInjector(Gain(0.5), Deterministic(2.0), InfiniteTime())}, seed=1)
     a = [c.apply("a", 1.0, t=float(t)) for t in range(3)]
     b = [c.apply("b", 1.0) for _ in range(3)]
     assert a == [1.0, 2.0, 2.0] and b == [0.5, 0.5, 0.5]
-    assert sorted(c.targets()) == ["a", "b"]
+    assert c.points() == ["a", "b"] and [i.name for i in c.injectors] == ["Bias@a#0", "Gain@b#1"]
 
 
-def test_missing_short_circuits_later_faults():
-    c = Campaign([PacketLoss("x"), Bias("x", 1.0)], seed=1)
+def test_missing_short_circuits_later_injectors():
+    c = Campaign({"x": [FaultInjector(PacketLoss(), Deterministic(), InfiniteTime(), name="drop"),
+                        FaultInjector(Bias(1.0), Deterministic(), InfiniteTime(), name="bias")]}, seed=1)
     o = c.inject("x", 1.0, t=0)
-    assert o.missing and o.manifested == ("PacketLoss@x#0",) and o.applied == ("PacketLoss@x#0",)
+    assert o.missing and o.data_error and o.caused_by == ("drop",) and o.active == ("drop",)
 
 
 def test_chained_on_activation_with_delay():
-    a = Bias("s1", 1.0, activation=At(2.0), duration=Fixed(10.0), name="bias")
-    b = PacketLoss("s2", activation=Triggered(by=a, on="activated", delay=1.5), duration=Fixed(1.0), name="loss")
-    c = Campaign([a, b], seed=1)
+    a = FaultInjector(Bias(1.0), Deterministic(2.0), ConstantTime(10.0), name="bias")
+    b = FaultInjector(PacketLoss(), Never(), ConstantTime(1.0), trigger=Trigger(by=a, delay=1.5), name="loss")
+    c = Campaign({"s1": a, "s2": b}, seed=1)
     out = [c.inject("s2", 1.0, t=float(t)).missing for t in range(7)]
     assert out == [False, False, False, False, True, False, False], "loss active on [3.5, 4.5): only t=4"
-    ev = c.events.filter(fault="loss", kind="activated")[0]
-    assert ev.source == "trigger:bias" and ev.sampled["trigger_delay"] == 1.5 and ev.sampled["scheduled_time"] == 3.5
+    rec = c.log.filter(injector="loss", kind="activation")[0]
+    assert rec.source == "trigger:bias" and rec.sampled["trigger_delay"] == 1.5 and rec.sampled["scheduled_time"] == 3.5
 
 
-def test_chained_on_manifestation_and_on_deactivation():
-    a = PacketLoss("link", probability=1.0, activation=At(1.0), duration=Fixed(2.0), name="drop")
-    b = Bias("ctrl", 1.0, activation=Triggered(by="drop", on="manifested"), duration=Once(), name="glitch")
-    d = Scale("pump", 0.0, activation=Triggered(by="drop", on="deactivated"), duration=Fixed(1.0), name="stall")
-    c = Campaign([a, b, d], seed=1)
-    ctrl, pump = [], []
-    for t in range(6):
-        c.inject("link", 1.0, t=float(t))
-        ctrl.append(c.apply("ctrl", 0.0))
-        pump.append(c.apply("pump", 1.0))
-    assert ctrl == [0.0, 1.0, 1.0, 0.0, 0.0, 0.0], "glitch active during the steps in which a packet was dropped"
-    assert pump == [1.0, 1.0, 1.0, 0.0, 1.0, 1.0], "stall starts when the drop ends (t=3)"
+def test_chained_fault_with_the_same_exposure_as_its_source():
+    """The paper's example: the chained fault is activated with the same duration as the first one."""
+    first = FaultInjector(Freeze(), Deterministic(1.0), ConstantTime(2.0), name="position_freeze")
+    second = FaultInjector(StuckAt(0.0), Never(), ConstantTime(2.0), trigger=Trigger(by="position_freeze"), name="velocity_stuck")
+    c = Campaign({"position": first, "velocity": second}, seed=1)
+    pos, vel = [], []
+    for t in range(5):
+        pos.append(c.apply("position", float(t) * 10, t=float(t)))
+        vel.append(c.apply("velocity", 5.0))
+    assert pos == [0.0, 0.0, 0.0, 30.0, 40.0] and vel == [5.0, 0.0, 0.0, 5.0, 5.0]
+    assert [(r.injector, r.kind, r.time) for r in c.log] == [
+        ("position_freeze", "activation", 1.0), ("velocity_stuck", "activation", 1.0),
+        ("position_freeze", "deactivation", 3.0), ("velocity_stuck", "deactivation", 3.0)]
 
 
-def test_chained_probability_uses_the_triggered_faults_stream():
+def test_chained_probability_uses_the_triggered_injectors_stream():
     hits = 0
     for seed in range(60):
-        a = Bias("x", 1.0, activation=At(0.0), duration=Once(), name="a")
-        b = Bias("y", 1.0, activation=Triggered(by="a", probability=0.5), duration=Once(), name="b")
-        c = Campaign([a, b], seed=seed)
+        a = FaultInjector(Bias(1.0), Deterministic(0.0), Once(), name="a")
+        b = FaultInjector(Bias(1.0), Never(), Once(), trigger=Trigger(by="a", probability=0.5), name="b")
+        c = Campaign({"x": a, "y": b}, seed=seed)
         c.advance(0.0)
-        hits += b.active
+        hits += b.error_flag
     assert 15 < hits < 45
 
 
-def test_trigger_cascade_in_same_step_and_no_self_trigger():
-    a = Bias("x", 1.0, activation=At(0.0), name="a")
-    b = Bias("y", 1.0, activation=Triggered(by="a"), name="b")
-    cc = Bias("z", 1.0, activation=Triggered(by="b"), name="c")
-    c = Campaign([cc, b, a], seed=1)    # deliberately reversed order
+def test_chain_cascades_in_one_step_regardless_of_order():
+    a = FaultInjector(Bias(1.0), Deterministic(0.0), InfiniteTime(), name="a")
+    b = FaultInjector(Bias(1.0), Never(), InfiniteTime(), trigger=Trigger(by="a"), name="b")
+    cc = FaultInjector(Bias(1.0), Never(), InfiniteTime(), trigger=Trigger(by="b"), name="c")
+    c = Campaign({"z": cc, "y": b, "x": a}, seed=1)   # deliberately reversed order
     c.advance(0.0)
-    assert [f.active for f in (a, b, cc)] == [True, True, True]
-    assert [e.fault for e in c.events] == ["a", "b", "c"]
+    assert [i.error_flag for i in (a, b, cc)] == [True, True, True]
+    assert [r.injector for r in c.log] == ["a", "b", "c"]
 
 
-def test_custom_user_defined_fault():
+def test_custom_user_defined_fault_type():
     @register
-    class Spike(Fault):
+    class Spike(FaultType):
         """Add a spike whose height decays over the fault's own lifetime."""
-        def __init__(self, target, height, decay=1.0, **kw):
-            super().__init__(target, **kw)
-            self.height = height
+        def __init__(self, value, decay=1.0):
+            self.value = value
             self.decay = decay
 
         def apply(self, value, ctx):
-            return value + self.height * np.exp(-self.decay * (ctx.elapsed or 0.0))
+            return value + self.value * np.exp(-self.decay * (ctx.elapsed or 0.0))
 
-    c = Campaign([Spike("x", height=2.0, activation=At(1.0), duration=Fixed(3.0))], seed=1)
+    c = Campaign({"x": FaultInjector(Spike(2.0), Deterministic(1.0), ConstantTime(3.0))}, seed=1)
     out = [c.apply("x", 0.0, t=float(t)) for t in range(5)]
     assert out == pytest.approx([0.0, 2.0, 2.0 * np.exp(-1), 2.0 * np.exp(-2), 0.0])
-    assert c.events[0].parameters == {"height": 2.0, "decay": 1.0} and c.events[0].fault_type == "Spike"
+    assert c.log[0].parameters == {"value": 2.0, "decay": 1.0} and c.log[0].fault_type == "Spike"
     replay = Campaign.from_spec(c.spec())
     assert [replay.apply("x", 0.0, t=float(t)) for t in range(5)] == pytest.approx(out)
 
 
-def test_events_carry_identity_times_parameters_samples_and_seed():
-    c = Campaign([Noise("x", 0.1, activation=SampledTime(Exponential(1.0)), duration=SampledDuration(Weibull(2.0, 2.0)))],
-                 seed=77, record_manifestations=True)
-    for t in range(40):
-        c.apply("x", 1.0, t=float(t))
-    act = c.events.filter(kind="activated")[0]
-    assert act.fault == "Noise@x#0" and act.fault_type == "Noise" and act.target == "x"
-    assert act.parameters["amplitude"] == 0.1 and act.parameters["distribution"] == {"kind": "Normal", "mean": 0.0, "std": 1.0}
-    assert set(act.sampled) >= {"activation_time", "scheduled_time", "sampled_delay", "duration"}
-    assert act.seed["campaign_seed"] == 77 and isinstance(act.seed["name_key"], int)
-    deact = c.events.filter(kind="deactivated")[0]
-    assert deact.time >= act.time + act.sampled["duration"]
-    man = c.events.filter(kind="manifested")
-    assert man and all(a.time <= m.time < deact.time for m in man for a in [act])
-    assert json.loads(c.events.to_json())[0]["kind"] == "activated"
-
-
-def test_manifestations_counted_even_when_not_recorded():
-    c = Campaign([Bias("x", 1.0)], seed=1)
-    for t in range(3):
-        c.apply("x", 0.0, t=float(t))
-    assert c.faults[0].manifestations == 3 and not c.events.filter(kind="manifested")
-
-
 def test_seedless_campaign_gets_a_recorded_seed_and_replays():
-    c = Campaign([Noise("x", 1.0)])
+    c = Campaign({"x": FaultInjector(Noise(1.0), Deterministic(), InfiniteTime())})
     assert c.seed is not None
     a = [c.apply("x", 0.0, t=float(t)) for t in range(3)]
     c.reset()
     assert [c.apply("x", 0.0, t=float(t)) for t in range(3)] == a
 
 
-def test_fault_streams_independent_of_campaign_membership():
-    """Adding an unrelated fault must not change another fault's random draws."""
-    n = Noise("x", 1.0, name="n")
-    alone = Campaign([n], seed=4)
+def test_streams_independent_of_campaign_membership():
+    alone = Campaign({"x": FaultInjector(Noise(1.0), Deterministic(), InfiniteTime(), name="n")}, seed=4)
     a = [alone.apply("x", 0.0, t=float(t)) for t in range(3)]
-    n2 = Noise("x", 1.0, name="n")
-    other = Noise("y", 1.0, name="other")
+    both = Campaign({"y": FaultInjector(Noise(1.0), Deterministic(), InfiniteTime(), name="other"),
+                     "x": FaultInjector(Noise(1.0), Deterministic(), InfiniteTime(), name="n")}, seed=4)
     b = []
-    c = Campaign([other, n2], seed=4)
     for t in range(3):
-        c.apply("y", 0.0, t=float(t))
-        b.append(c.apply("x", 0.0))
-    assert a == b
+        both.apply("y", 0.0, t=float(t))
+        b.append(both.apply("x", 0.0))
+    assert a == b, "adding an unrelated injector must not change another injector's draws"
 
 
-def test_fault_cannot_belong_to_two_campaigns_and_names_unique():
-    f = Bias("x", 1.0)
-    Campaign([f], seed=1)
+def test_duplicate_names_and_double_attachment_are_rejected():
     with pytest.raises(ValueError):
-        Campaign([f], seed=1)
+        Campaign({"x": [FaultInjector(Bias(1.0), Deterministic(), InfiniteTime(), name="same"),
+                        FaultInjector(Bias(2.0), Deterministic(), InfiniteTime(), name="same")]}, seed=1)
+    inj = FaultInjector(Bias(1.0), Deterministic(), InfiniteTime())
+    c = Campaign({"x": inj}, seed=1)
     with pytest.raises(ValueError):
-        Campaign([Bias("x", 1.0, name="same"), Bias("x", 2.0, name="same")], seed=1)
+        c.attach("y", inj)
 
 
-def test_inject_auto_advances_and_advance_is_idempotent_at_same_time():
-    c = Campaign([Bias("x", 1.0, activation=At(2.0), duration=Once())], seed=1)
+def test_inject_auto_advances_and_same_time_is_idempotent():
+    c = Campaign({"x": FaultInjector(Bias(1.0), Deterministic(2.0), Once())}, seed=1)
     assert c.apply("x", 0.0, t=2.0) == 1.0
-    assert c.apply("x", 0.0, t=2.0) == 1.0, "same time: no new advance, still active"
+    assert c.apply("x", 0.0, t=2.0) == 1.0
     assert c.apply("x", 0.0, t=3.0) == 0.0
+
+
+def test_trigger_overrules_the_injectors_own_event():
+    src = FaultInjector(Bias(1.0), Deterministic(1.0), Once(), name="src")
+    both = FaultInjector(Bias(1.0), Deterministic(50.0), Once(), trigger=Trigger(by="src"), name="both")
+    c = Campaign({"x": src, "y": both}, seed=1)
+    out = [c.apply("y", 0.0, t=float(t)) for t in range(4)]
+    assert out == [0.0, 1.0, 0.0, 0.0], "forced at t=1 by the trigger although its own event says t=50"
+    assert c.log.filter(injector="both", kind="activation")[0].source == "trigger:src"
+    for t in range(4, 52):
+        c.advance(float(t))
+    assert [r.time for r in c.log.filter(injector="both", kind="activation")] == [1.0, 50.0], "and its own event still fires later"

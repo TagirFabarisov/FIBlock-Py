@@ -1,10 +1,9 @@
-"""Programmatic control: an external search sets fault parameters, and a whole
+"""Programmatic control: an external search sets the fault value, and a whole
 campaign is exported as plain data and replayed exactly. No optimiser library is
-involved; parameters are ordinary attributes."""
-import json
+involved; the fault value is an ordinary attribute."""
 import random
 
-from fiblock import At, Bias, Campaign, Fixed, Noise, Uniform
+from fiblock import Bias, Campaign, ConstantTime, Deterministic, FaultInjector
 
 
 def simulate(campaign):
@@ -19,22 +18,22 @@ def simulate(campaign):
     return worst
 
 
-bias = Bias("level_sensor", magnitude=0.0, activation=At(10.0), duration=Fixed(20.0), name="sensor_bias")
-campaign = Campaign([bias], seed=1)
+bias = Bias(0.0)
+campaign = Campaign({"level_sensor": FaultInjector(bias, Deterministic(10.0), ConstantTime(20.0), name="sensor_bias")}, seed=1)
 
-# 1. an external search proposes candidate magnitudes and keeps the most damaging one
+# 1. an external search proposes candidate fault values and keeps the most damaging one
 rng = random.Random(0)
 best = None
 for _ in range(20):
-    bias.magnitude = rng.uniform(-3.0, 3.0)      # the search writes the parameter
+    bias.value = rng.uniform(-3.0, 3.0)         # the search writes the fault value
     campaign.reset()                            # same seed, fresh run
     damage = simulate(campaign)
     if best is None or damage > best[1]:
-        best = (bias.magnitude, damage)
-print(f"most damaging bias found: magnitude={best[0]:+.3f} -> worst deviation {best[1]:.2f}")
+        best = (bias.value, damage)
+print(f"most damaging bias found: value={best[0]:+.3f} -> worst deviation {best[1]:.2f}")
 
 # 2. export the campaign as plain data, rebuild it elsewhere, replay exactly
-bias.magnitude = best[0]
+bias.value = best[0]
 campaign.reset()
 reference = simulate(campaign)
 text = campaign.to_json(indent=1)
