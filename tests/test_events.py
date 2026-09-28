@@ -104,3 +104,12 @@ def test_time_must_not_go_backwards():
         c.advance(4.0)
     with pytest.raises(ValueError):
         c.inject("x", 0.0, t=4.0)
+
+
+def test_poisson_and_binomial_fit_the_distribution_api():
+    from fiblock import Binomial, Campaign, DurationDistribution, FaultInjector, Poisson
+    c = Campaign({"x": FaultInjector(Bias(1.0), FailureTimeDistribution(Poisson(3.0)), DurationDistribution(Binomial(10, 0.5)))}, seed=4)
+    for t in range(30):
+        c.advance(float(t))
+    act = c.log.filter(kind="activation")[0]
+    assert float(act.sampled["time_to_failure"]).is_integer() and 0 <= act.sampled["duration"] <= 10

@@ -22,7 +22,7 @@ from .core import (  # noqa: E402
 )
 from .distributions import (  # noqa: E402
     Distribution, Constant, Uniform, Normal, LogNormal, Exponential, Weibull, Gamma, Choice, Empirical, Mixture,
-    FromCallable, Scipy, as_distribution,
+    Poisson, Binomial, FromCallable, Scipy, as_distribution,
 )
 from .types import Bias, BitFlip, Delay, Drift, Freeze, Gain, Noise, PacketLoss, StuckAt  # noqa: E402
 from .events import (  # noqa: E402
@@ -39,7 +39,7 @@ __all__ = [
     "FaultType", "InjectionContext", "InjectionRecord", "Outcome", "Recorder", "Trigger", "register", "registry",
     # distributions
     "Distribution", "Constant", "Uniform", "Normal", "LogNormal", "Exponential", "Weibull", "Gamma", "Choice",
-    "Empirical", "Mixture", "FromCallable", "Scipy", "as_distribution",
+    "Empirical", "Mixture", "Poisson", "Binomial", "FromCallable", "Scipy", "as_distribution",
     # fault types
     "Bias", "BitFlip", "Delay", "Drift", "Freeze", "Gain", "Noise", "PacketLoss", "StuckAt",
     # fault events

@@ -42,7 +42,7 @@ flowchart TB
         F["Once · ConstantTime · InfiniteTime<br/>MeanTimeToRepair · DurationDistribution"]
     end
     subgraph dist["fiblock.distributions"]
-        D["Constant · Uniform · Normal · LogNormal<br/>Exponential · Weibull · Gamma<br/>Choice · Empirical · Mixture"]
+        D["Constant · Uniform · Normal · LogNormal<br/>Exponential · Weibull · Gamma<br/>Choice · Empirical · Poisson · Binomial · Mixture"]
     end
     subgraph logger["fiblock.logger — evidence"]
         L["InjectionLog<br/>fault records + DataErrorRecord<br/>filter · counts · to_json"]

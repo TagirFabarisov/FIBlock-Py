@@ -182,8 +182,8 @@ or effect.
 
 Any place that draws a time, a duration, a delay or a noise sample takes a
 distribution object: `Constant`, `Uniform`, `Normal`, `LogNormal`,
-`Exponential`, `Weibull`, `Gamma`, `Choice`, `Empirical`, `Mixture`, a bare
-number, any callable `rng -> float`, or a SciPy frozen distribution. This is
+`Exponential`, `Weibull`, `Gamma`, `Choice`, `Empirical`, `Poisson`, `Binomial`,
+`Mixture`, a bare number, any callable `rng -> float`, or a SciPy frozen distribution. This is
 what lets different degradation scenarios be expressed: a wear-out
 activation is a Weibull with shape above one, an infant-mortality one a shape
 below one, a two-population component a `Mixture` of two Weibulls.

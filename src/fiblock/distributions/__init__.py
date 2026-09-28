@@ -2,7 +2,7 @@
 from .base import Distribution, FromCallable, Scipy, as_distribution
 from .composite import Mixture
 from .continuous import Constant, Exponential, Gamma, LogNormal, Normal, Uniform, Weibull
-from .discrete import Choice, Empirical
+from .discrete import Binomial, Choice, Empirical, Poisson
 
 __all__ = ["Distribution", "FromCallable", "Scipy", "as_distribution", "Mixture", "Constant", "Exponential",
-           "Gamma", "LogNormal", "Normal", "Uniform", "Weibull", "Choice", "Empirical"]
+           "Gamma", "LogNormal", "Normal", "Uniform", "Weibull", "Choice", "Empirical", "Poisson", "Binomial"]
